@@ -13,6 +13,7 @@ use ark_poly::{
     univariate::DensePolynomial, EvaluationDomain, Evaluations as EvaluationsOnDomain,
     GeneralEvaluationDomain, Polynomial, UVPolynomial,
 };
+use ark_relations::r1cs::ConstraintSystemRef;
 use ark_relations::r1cs::{
     ConstraintSynthesizer, ConstraintSystem, OptimizationGoal, SynthesisError,
 };
@@ -237,6 +238,95 @@ impl<F: PrimeField> AHPForR1CS<F> {
                 pcs.instance_assignment,
                 pcs.witness_assignment,
                 pcs.num_constraints,
+            )
+        };
+
+        let num_input_variables = formatted_input_assignment.len();
+        let num_witness_variables = witness_assignment.len();
+        if index.index_info.num_constraints != num_constraints
+            || num_input_variables + num_witness_variables != index.index_info.num_variables
+        {
+            return Err(Error::InstanceDoesNotMatchIndex);
+        }
+
+        if !Self::formatted_public_input_is_admissible(&formatted_input_assignment) {
+            return Err(Error::InvalidPublicInputLength);
+        }
+
+        // Perform matrix multiplications
+        let inner_prod_fn = |row: &[(F, usize)]| {
+            let mut acc = F::zero();
+            for &(ref coeff, i) in row {
+                let tmp = if i < num_input_variables {
+                    formatted_input_assignment[i]
+                } else {
+                    witness_assignment[i - num_input_variables]
+                };
+
+                acc += &(if coeff.is_one() { tmp } else { tmp * coeff });
+            }
+            acc
+        };
+
+        let eval_z_a_time = start_timer!(|| "Evaluating z_A");
+        let z_a = index.a.iter().map(|row| inner_prod_fn(row)).collect();
+        end_timer!(eval_z_a_time);
+
+        let eval_z_b_time = start_timer!(|| "Evaluating z_B");
+        let z_b = index.b.iter().map(|row| inner_prod_fn(row)).collect();
+        end_timer!(eval_z_b_time);
+
+        let zk_bound = 1; // One query is sufficient for our desired soundness
+
+        let domain_h = GeneralEvaluationDomain::new(num_constraints)
+            .ok_or(SynthesisError::PolynomialDegreeTooLarge)?;
+
+        let domain_k = GeneralEvaluationDomain::new(num_non_zero)
+            .ok_or(SynthesisError::PolynomialDegreeTooLarge)?;
+
+        let domain_x = GeneralEvaluationDomain::new(num_input_variables)
+            .ok_or(SynthesisError::PolynomialDegreeTooLarge)?;
+
+        end_timer!(init_time);
+
+        Ok(ProverState {
+            formatted_input_assignment,
+            witness_assignment,
+            z_a: Some(z_a),
+            z_b: Some(z_b),
+            w_poly: None,
+            mz_polys: None,
+            zk_bound,
+            index,
+            verifier_first_msg: None,
+            mask_poly: None,
+            domain_h,
+            domain_k,
+            domain_x,
+        })
+    }
+
+    /// Initialize the AHP prover.
+    pub fn prover_init_from_constraint_system<'a>(
+        index: &'a Index<F>,
+        constraint_system: ConstraintSystemRef<F>,
+    ) -> Result<ProverState<'a, F>, Error> {
+        let init_time = start_timer!(|| "AHP::Prover::Init");
+
+        let padding_time = start_timer!(|| "Padding matrices to make them square");
+        pad_input_for_indexer_and_prover(constraint_system.clone());
+        constraint_system.finalize();
+        make_matrices_square_for_prover(constraint_system.clone());
+        end_timer!(padding_time);
+
+        let num_non_zero = index.index_info.num_non_zero;
+
+        let (formatted_input_assignment, witness_assignment, num_constraints) = {
+            let constraint_system = constraint_system.into_inner().unwrap();
+            (
+                constraint_system.instance_assignment,
+                constraint_system.witness_assignment,
+                constraint_system.num_constraints,
             )
         };
 

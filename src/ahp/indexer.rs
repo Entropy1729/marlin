@@ -10,7 +10,8 @@ use crate::Vec;
 use ark_ff::PrimeField;
 use ark_poly::{EvaluationDomain, GeneralEvaluationDomain};
 use ark_relations::r1cs::{
-    ConstraintSynthesizer, ConstraintSystem, OptimizationGoal, SynthesisError, SynthesisMode,
+    ConstraintSynthesizer, ConstraintSystem, ConstraintSystemRef, OptimizationGoal, SynthesisError,
+    SynthesisMode,
 };
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, SerializationError};
 use ark_std::{
@@ -174,6 +175,89 @@ impl<F: PrimeField> AHPForR1CS<F> {
             ics.num_instance_variables(),
             ics.num_witness_variables(),
             ics.num_constraints(),
+            num_non_zero_val,
+        );
+        let num_variables = num_formatted_input_variables + num_witness_variables;
+
+        if num_constraints != num_formatted_input_variables + num_witness_variables {
+            eprintln!(
+                "number of (formatted) input_variables: {}",
+                num_formatted_input_variables
+            );
+            eprintln!("number of witness_variables: {}", num_witness_variables);
+            eprintln!("number of num_constraints: {}", num_constraints);
+            eprintln!("number of num_non_zero: {}", num_non_zero);
+            return Err(Error::NonSquareMatrix);
+        }
+
+        if !Self::num_formatted_public_inputs_is_admissible(num_formatted_input_variables) {
+            return Err(Error::InvalidPublicInputLength);
+        }
+
+        let index_info = IndexInfo {
+            num_variables,
+            num_constraints,
+            num_non_zero,
+            num_instance_variables: num_formatted_input_variables,
+
+            f: PhantomData,
+        };
+
+        let domain_h = GeneralEvaluationDomain::new(num_constraints)
+            .ok_or(SynthesisError::PolynomialDegreeTooLarge)?;
+        let domain_k = GeneralEvaluationDomain::new(num_non_zero)
+            .ok_or(SynthesisError::PolynomialDegreeTooLarge)?;
+        let x_domain = GeneralEvaluationDomain::new(num_formatted_input_variables)
+            .ok_or(SynthesisError::PolynomialDegreeTooLarge)?;
+
+        let joint_arithmetization_time = start_timer!(|| "Arithmetizing all matrices");
+        let joint_arith = arithmetize_matrix(
+            &joint_matrix,
+            &mut a,
+            &mut b,
+            &mut c,
+            domain_k,
+            domain_h,
+            x_domain,
+        );
+        end_timer!(joint_arithmetization_time);
+
+        end_timer!(index_time);
+        Ok(Index {
+            index_info,
+
+            a,
+            b,
+            c,
+
+            joint_arith,
+        })
+    }
+
+    /// Generate the index for this constraint system.
+    pub fn index_from_constraint_system(
+        constraint_system: ConstraintSystemRef<F>,
+    ) -> Result<Index<F>, Error> {
+        let index_time = start_timer!(|| "AHP::Index");
+
+        let padding_time = start_timer!(|| "Padding matrices to make them square");
+        pad_input_for_indexer_and_prover(constraint_system.clone());
+        end_timer!(padding_time);
+        let matrix_processing_time = start_timer!(|| "Processing matrices");
+        constraint_system.finalize();
+        make_matrices_square_for_indexer(constraint_system.clone());
+        let matrices = constraint_system
+            .to_matrices()
+            .expect("should not be `None`");
+        let joint_matrix = sum_matrices(&matrices.a, &matrices.b, &matrices.c);
+        let num_non_zero_val = num_non_zero(&joint_matrix);
+        let (mut a, mut b, mut c) = (matrices.a, matrices.b, matrices.c);
+        end_timer!(matrix_processing_time);
+
+        let (num_formatted_input_variables, num_witness_variables, num_constraints, num_non_zero) = (
+            constraint_system.num_instance_variables(),
+            constraint_system.num_witness_variables(),
+            constraint_system.num_constraints(),
             num_non_zero_val,
         );
         let num_variables = num_formatted_input_variables + num_witness_variables;
