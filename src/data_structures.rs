@@ -22,7 +22,7 @@ pub type UniversalSRS<F, PC> = <PC as PolynomialCommitment<F, DensePolynomial<F>
 /* ************************************************************************* */
 
 /// Verification key for a specific index (i.e., R1CS matrices).
-#[derive(CanonicalSerialize, CanonicalDeserialize)]
+#[derive(CanonicalSerialize, CanonicalDeserialize, Debug)]
 pub struct IndexVerifierKey<F: PrimeField, PC: PolynomialCommitment<F, DensePolynomial<F>>> {
     /// Stores information about the size of the index, as well as its field of
     /// definition.

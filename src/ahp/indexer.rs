@@ -27,7 +27,7 @@ use crate::ahp::constraint_systems::{
 /// Information about the index, including the field of definition, the number of
 /// variables, the number of constraints, and the maximum number of non-zero
 /// entries in any of the constraint matrices.
-#[derive(Derivative, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(Derivative, CanonicalSerialize, CanonicalDeserialize, Debug)]
 #[derivative(Clone(bound = ""), Copy(bound = ""))]
 pub struct IndexInfo<F> {
     /// The total number of variables in the constraint system.
